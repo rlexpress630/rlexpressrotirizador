@@ -1,0 +1,7 @@
+{
+  "name": "RL Roteirizador ",
+  "description": "Extrai endereços de textos usando IA e cria a melhor rota no Google Maps.",
+  "requestFramePermissions": [
+    "geolocation"
+  ]
+}
