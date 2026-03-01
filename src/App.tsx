@@ -3,7 +3,15 @@ import { GoogleGenAI, Type } from '@google/genai';
 import { MapPin, Route, Search, Trash2, Loader2, AlertCircle, ImagePlus, X, Save, Package, CheckCircle2, Navigation } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+const apiKey = process.env.GEMINI_API_KEY || import.meta.env.VITE_GEMINI_API_KEY || '';
+let ai: GoogleGenAI | null = null;
+try {
+  if (apiKey) {
+    ai = new GoogleGenAI({ apiKey });
+  }
+} catch (e) {
+  console.error("Failed to initialize Gemini API:", e);
+}
 
 export default function App() {
   const [inputText, setInputText] = useState('');
@@ -109,6 +117,11 @@ export default function App() {
   };
 
   const handleExtract = async () => {
+    if (!apiKey || !ai) {
+      setError('Chave de API do Google Gemini não configurada. Configure a variável GEMINI_API_KEY na Vercel.');
+      return;
+    }
+
     if (!inputText.trim() && images.length === 0) {
       setError('Por favor, insira algum texto ou adicione fotos com endereços.');
       return;
@@ -162,7 +175,7 @@ Texto:
 ${cleanedText || 'Nenhum texto fornecido. Extraia os endereços apenas das imagens.'}`
       };
 
-      const response = await ai.models.generateContent({
+      const response = await ai!.models.generateContent({
         model: 'gemini-3-flash-preview',
         contents: { parts: [...imageParts, textPart] },
         config: {
