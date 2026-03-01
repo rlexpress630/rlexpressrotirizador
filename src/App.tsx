@@ -1,6 +1,6 @@
 import { useState, useEffect, ChangeEvent } from 'react';
 import { GoogleGenAI, Type } from '@google/genai';
-import { MapPin, Route, Search, Trash2, Loader2, AlertCircle, ImagePlus, X, Save, Package, CheckCircle2, Navigation } from 'lucide-react';
+import { MapPin, Route, Search, Trash2, Loader2, AlertCircle, ImagePlus, X, Save, Package, CheckCircle2, Navigation, Download, Sparkles, AlertTriangle } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 const apiKey = process.env.GEMINI_API_KEY || import.meta.env.VITE_GEMINI_API_KEY || '';
@@ -19,6 +19,7 @@ export default function App() {
   const [imagePreviews, setImagePreviews] = useState<string[]>([]);
   const [addresses, setAddresses] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [loadingStatus, setLoadingStatus] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
   const [locationNotice, setLocationNotice] = useState<string | null>(null);
   const [clearNotice, setClearNotice] = useState<string | null>(null);
@@ -27,6 +28,7 @@ export default function App() {
   const [isGettingLocation, setIsGettingLocation] = useState(false);
   const [autoClear, setAutoClear] = useState(true);
   const [draftData, setDraftData] = useState<{inputText: string, addresses: string[], pickupAddress?: string} | null>(null);
+  const [selectedAddressIndex, setSelectedAddressIndex] = useState<number | null>(null);
 
   // Check for saved draft on mount
   useEffect(() => {
@@ -128,11 +130,16 @@ export default function App() {
     }
 
     setIsLoading(true);
+    setLoadingStatus('Iniciando análise...');
     setError(null);
 
     try {
+      if (images.length > 0) {
+        setLoadingStatus(`Analisando ${images.length} ${images.length === 1 ? 'imagem' : 'imagens'}...`);
+      }
       const imageParts = await Promise.all(images.map(fileToGenerativePart));
       
+      setLoadingStatus('Identificando endereços no texto...');
       // Limpa o texto removendo caracteres especiais indesejados e espaços extras
       // Mantém letras (incluindo acentos), números, espaços e pontuações comuns em endereços
       let cleanedText = inputText
@@ -158,7 +165,15 @@ export default function App() {
         .replace(/\bAp\.\s*/gi, 'Apartamento ')
         .replace(/\bBl\.\s*/gi, 'Bloco ')
         .replace(/\bCj\.\s*/gi, 'Conjunto ')
-        .replace(/\bEd\.\s*/gi, 'Edifício ');
+        .replace(/\bEd\.\s*/gi, 'Edifício ')
+        .replace(/\bCs\.\s*/gi, 'Casa ')
+        .replace(/\bFd\.\s*/gi, 'Fundos ')
+        .replace(/\bFr\.\s*/gi, 'Frente ')
+        .replace(/\bLt\.\s*/gi, 'Lote ')
+        .replace(/\bQd\.\s*/gi, 'Quadra ')
+        .replace(/\bSl\.\s*/gi, 'Sala ')
+        .replace(/\bLj\.\s*/gi, 'Loja ')
+        .replace(/\bGalp\.\s*/gi, 'Galpão ');
 
       // Normaliza formatos de CEP (ex: 12345678 -> 12345-678)
       cleanedText = cleanedText.replace(/\b(\d{5})[-.\s]?(\d{3})\b/g, '$1-$2');
@@ -167,14 +182,21 @@ export default function App() {
         text: `Você é um especialista em logística e roteirização no Brasil.
 Sua tarefa é:
 1. Extrair todos os endereços completos mencionados no texto e/ou nas imagens fornecidas.
-2. Formatar cada endereço de forma padronizada (ex: "Rua Nome, Número - Bairro, Cidade - Estado, CEP").
-3. Ordenar esses endereços de forma lógica para criar a rota mais eficiente (menor percurso possível), assumindo que o primeiro endereço extraído ou o mais central seja o ponto de partida.
-4. Retorne APENAS um array JSON contendo as strings dos endereços formatados e ordenados.
+2. Identificar e preservar detalhes importantes como:
+   - Unidades: Apartamento, Casa, Sala, Loja, Galpão.
+   - Complementos: Bloco, Fundos, Frente, Lote, Quadra.
+   - Nomes de Condomínios, Edifícios ou Empresas.
+3. Formatar cada endereço de forma padronizada e completa:
+   "Logradouro, Número - Complemento (se houver) - Bairro, Cidade - Estado, CEP"
+   Exemplo: "Avenida Paulista, 1000 - Edifício Safra, 10º andar - Bela Vista, São Paulo - SP, 01310-100"
+4. Ordenar esses endereços de forma lógica para criar a rota mais eficiente (menor percurso possível), assumindo que o primeiro endereço extraído ou o mais central seja o ponto de partida.
+5. Retorne APENAS um array JSON contendo as strings dos endereços formatados e ordenados.
 
 Texto:
 ${cleanedText || 'Nenhum texto fornecido. Extraia os endereços apenas das imagens.'}`
       };
 
+      setLoadingStatus('Processando endereços com IA...');
       const response = await ai!.models.generateContent({
         model: 'gemini-3-flash-preview',
         contents: { parts: [...imageParts, textPart] },
@@ -191,6 +213,7 @@ ${cleanedText || 'Nenhum texto fornecido. Extraia os endereços apenas das image
       });
 
       if (response.text) {
+        setLoadingStatus('Organizando lista de endereços...');
         let jsonText = response.text.trim();
         // Remove markdown formatting if present
         if (jsonText.startsWith('```')) {
@@ -206,21 +229,50 @@ ${cleanedText || 'Nenhum texto fornecido. Extraia os endereços apenas das image
           }
         } catch (parseError) {
           console.error('Erro ao analisar JSON:', parseError, 'Texto recebido:', jsonText);
-          setError('A inteligência artificial retornou um formato inválido. Tente novamente.');
+          setError('A inteligência artificial retornou os dados em um formato inválido. Tente simplificar o texto ou as imagens.');
         }
       } else {
-        setError('Falha ao extrair endereços. Tente novamente.');
+        setError('A inteligência artificial não retornou nenhum dado. Tente novamente.');
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Erro ao extrair endereços:', err);
-      setError('Ocorreu um erro ao processar os dados. Verifique sua conexão e tente novamente.');
+      
+      const errorMessage = err?.message?.toLowerCase() || '';
+      
+      if (!navigator.onLine) {
+        setError('Sem conexão com a internet. Verifique sua rede e tente novamente.');
+      } else if (errorMessage.includes('api key') || err?.status === 401 || err?.status === 403) {
+        setError('Erro de autenticação: A chave de API do Google Gemini é inválida ou não tem permissão.');
+      } else if (errorMessage.includes('quota') || err?.status === 429) {
+        setError('Limite de uso da API excedido. Tente novamente em alguns instantes.');
+      } else if (errorMessage.includes('fetch') || err?.name === 'TypeError') {
+        setError('Erro de rede ao contatar a inteligência artificial. Verifique sua conexão.');
+      } else if (errorMessage.includes('timeout')) {
+        setError('A requisição demorou muito para responder. Tente novamente.');
+      } else {
+        setError(`Erro inesperado: ${err?.message || 'Falha ao processar os dados.'}`);
+      }
     } finally {
       setIsLoading(false);
+      setLoadingStatus('');
     }
   };
 
   const handleRemoveAddress = (indexToRemove: number) => {
     setAddresses(addresses.filter((_, index) => index !== indexToRemove));
+    if (selectedAddressIndex === indexToRemove) {
+      setSelectedAddressIndex(null);
+    } else if (selectedAddressIndex !== null && indexToRemove < selectedAddressIndex) {
+      setSelectedAddressIndex(selectedAddressIndex - 1);
+    }
+    setClearNotice("Endereço removido da lista.");
+    setTimeout(() => setClearNotice(null), 3000);
+  };
+
+  const handleAddressClick = (index: number, address: string) => {
+    setSelectedAddressIndex(index);
+    const encodedAddress = encodeURIComponent(address);
+    window.open(`https://www.google.com/maps/search/?api=1&query=${encodedAddress}`, '_blank');
   };
 
   const handleGetCurrentLocation = () => {
@@ -247,28 +299,60 @@ ${cleanedText || 'Nenhum texto fornecido. Extraia os endereços apenas das image
     );
   };
 
+  const validatePickupAddress = (address: string): boolean => {
+    if (!address.trim()) return false;
+    
+    // Check for coordinates format (lat,long)
+    const coordRegex = /^-?\d+(\.\d+)?,\s*-?\d+(\.\d+)?$/;
+    if (coordRegex.test(address.trim())) return true;
+    
+    // Check for minimum address length (e.g., "Rua X")
+    if (address.trim().length < 5) return false;
+    
+    return true;
+  };
+
+  const validateCEP = (address: string): boolean => {
+    // Regex para CEP: 5 dígitos, opcionalmente traço, 3 dígitos (ex: 12345-678 ou 12345678)
+    // \b garante que não pegue parte de um número maior
+    const cepRegex = /\b\d{5}[-.\s]?\d{3}\b/;
+    return cepRegex.test(address);
+  };
+
   const openFullRoute = () => {
     if (addresses.length === 0 && !pickupAddress) return;
     
-    // Abre a janela de forma síncrona para evitar bloqueadores de pop-up
-    const newWindow = window.open('', '_blank');
-    if (!newWindow) {
-      setError('O bloqueador de pop-ups impediu a abertura do mapa. Por favor, permita pop-ups para este site.');
+    // Validate pickup address if provided
+    if (pickupAddress && !validatePickupAddress(pickupAddress)) {
+      setError('O endereço de coleta parece inválido. Insira um endereço completo ou coordenadas (lat,long).');
       return;
     }
     
-    newWindow.document.write('<div style="font-family: sans-serif; padding: 20px; text-align: center; color: #3f3f46;">Calculando a melhor rota e abrindo o Google Maps...</div>');
-
-    const buildUrlAndRedirect = (startPoint?: string) => {
-      const baseUrl = 'https://www.google.com/maps/dir/';
+    // Função auxiliar para redirecionar e limpar
+    const performRedirect = (win: Window, routePoints: string[]) => {
+      // Constrói a URL usando a API Universal do Google Maps para forçar abertura no App
+      // Documentação: https://developers.google.com/maps/documentation/urls/get-started#directions-action
+      let url = '';
       
-      const routeAddresses = [];
-      if (startPoint) routeAddresses.push(startPoint);
-      if (pickupAddress) routeAddresses.push(pickupAddress);
-      routeAddresses.push(...addresses);
+      if (routePoints.length >= 2) {
+        const origin = encodeURIComponent(routePoints[0]);
+        const destination = encodeURIComponent(routePoints[routePoints.length - 1]);
+        
+        let params = `&origin=${origin}&destination=${destination}`;
+        
+        if (routePoints.length > 2) {
+          const waypoints = routePoints.slice(1, -1).map(addr => encodeURIComponent(addr)).join('|');
+          params += `&waypoints=${waypoints}`;
+        }
+        
+        url = `https://www.google.com/maps/dir/?api=1${params}&travelmode=driving`;
+      } else {
+        // Fallback para formato de path se houver apenas 1 ponto (ex: apenas destino)
+        const path = routePoints.map(addr => encodeURIComponent(addr)).join('/');
+        url = `https://www.google.com/maps/dir/${path}?travelmode=driving`;
+      }
 
-      const path = routeAddresses.map(addr => encodeURIComponent(addr)).join('/');
-      newWindow.location.href = `${baseUrl}${path}`;
+      win.location.href = url;
 
       if (autoClear) {
         setTimeout(() => {
@@ -282,7 +366,27 @@ ${cleanedText || 'Nenhum texto fornecido. Extraia os endereços apenas das image
       }
     };
 
-    // Tenta usar a localização atual do usuário como ponto de partida
+    // 1. Prioridade: Endereço de Coleta Manual
+    if (pickupAddress.trim()) {
+      const newWindow = window.open('', '_blank');
+      if (!newWindow) {
+        setError('O bloqueador de pop-ups impediu a abertura do mapa. Por favor, permita pop-ups para este site.');
+        return;
+      }
+      newWindow.document.write('<div style="font-family: sans-serif; padding: 20px; text-align: center; color: #3f3f46;">Abrindo rota no Google Maps...</div>');
+      performRedirect(newWindow, [pickupAddress, ...addresses]);
+      return;
+    }
+
+    // 2. Fallback: Geolocalização
+    const newWindow = window.open('', '_blank');
+    if (!newWindow) {
+      setError('O bloqueador de pop-ups impediu a abertura do mapa. Por favor, permita pop-ups para este site.');
+      return;
+    }
+    
+    newWindow.document.write('<div style="font-family: sans-serif; padding: 20px; text-align: center; color: #3f3f46;">Obtendo sua localização atual para iniciar a rota...</div>');
+
     if ("geolocation" in navigator) {
       navigator.geolocation.getCurrentPosition(
         (position) => {
@@ -292,16 +396,100 @@ ${cleanedText || 'Nenhum texto fornecido. Extraia os endereços apenas das image
           setLocationNotice("Sua localização atual foi usada como ponto de partida.");
           setTimeout(() => setLocationNotice(null), 6000);
           
-          buildUrlAndRedirect(startPoint);
+          performRedirect(newWindow, [startPoint, ...addresses]);
         },
         (err) => {
-          console.warn("Geolocalização falhou ou foi negada:", err);
-          buildUrlAndRedirect(); // Fallback: usa apenas os endereços extraídos
+          console.warn("Geolocalização falhou:", err);
+          newWindow.close(); // Fecha a janela pois falhou
+          setError("Não foi possível obter sua localização. Por favor, insira um Endereço de Coleta manualmente.");
         },
-        { timeout: 5000, maximumAge: 60000 }
+        { timeout: 8000, maximumAge: 60000 }
       );
     } else {
-      buildUrlAndRedirect();
+      newWindow.close();
+      setError("Seu navegador não suporta geolocalização. Por favor, insira um Endereço de Coleta manualmente.");
+    }
+  };
+
+  const handleExport = () => {
+    if (addresses.length === 0) return;
+
+    const content = "Endereço\n" + addresses.join("\n");
+    const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', 'rota_otimizada.csv');
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const handleReoptimize = async () => {
+    if (addresses.length < 2) {
+      setError('Adicione pelo menos 2 endereços para otimizar a rota.');
+      return;
+    }
+
+    // Validate pickup address if provided
+    if (pickupAddress && !validatePickupAddress(pickupAddress)) {
+      setError('O endereço de coleta parece inválido. Insira um endereço completo ou coordenadas (lat,long).');
+      return;
+    }
+
+    if (!apiKey || !ai) {
+      setError('Chave de API não configurada.');
+      return;
+    }
+
+    setIsLoading(true);
+    setLoadingStatus('Calculando a rota mais curta...');
+    setError(null);
+
+    try {
+      const textPart = {
+        text: `Você é um especialista em logística.
+Sua tarefa é reordenar a seguinte lista de endereços para criar a rota mais eficiente (menor percurso possível).
+Ponto de partida: ${pickupAddress || 'Primeiro endereço da lista'}
+
+Endereços para visitar:
+${addresses.join('\n')}
+
+Retorne APENAS um array JSON contendo as strings dos endereços na nova ordem otimizada.
+Mantenha os endereços exatamente como estão escritos, apenas mude a ordem.`
+      };
+
+      const response = await ai.models.generateContent({
+        model: 'gemini-3-flash-preview',
+        contents: { parts: [textPart] },
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.STRING,
+            },
+          },
+        },
+      });
+
+      if (response.text) {
+        setLoadingStatus('Finalizando otimização...');
+        let jsonText = response.text.trim();
+        if (jsonText.startsWith('```')) {
+          jsonText = jsonText.replace(/^```(?:json)?\n?/i, '').replace(/\n?```$/i, '');
+        }
+        const optimizedAddresses = JSON.parse(jsonText);
+        setAddresses(optimizedAddresses);
+        setClearNotice('Rota reotimizada com sucesso!');
+        setTimeout(() => setClearNotice(null), 3000);
+      }
+    } catch (err: any) {
+      console.error('Erro ao reotimizar:', err);
+      setError('Falha ao reotimizar a rota. Tente novamente.');
+    } finally {
+      setIsLoading(false);
+      setLoadingStatus('');
     }
   };
 
@@ -442,7 +630,7 @@ ${cleanedText || 'Nenhum texto fornecido. Extraia os endereços apenas das image
               {isLoading ? (
                 <>
                   <Loader2 size={18} className="animate-spin" />
-                  <span>Analisando e Extraindo...</span>
+                  <span>{loadingStatus || 'Analisando e Extraindo...'}</span>
                 </>
               ) : (
                 <>
@@ -456,7 +644,18 @@ ${cleanedText || 'Nenhum texto fornecido. Extraia os endereços apenas das image
           {/* Right Column: Output & Routing */}
           <div className="space-y-4">
             <div>
-              <h2 className="text-lg font-medium text-zinc-800 mb-1">Rota Otimizada</h2>
+              <div className="flex items-center justify-between mb-1">
+                <h2 className="text-lg font-medium text-zinc-800">Rota Otimizada</h2>
+                <button
+                  onClick={handleReoptimize}
+                  disabled={isLoading || addresses.length < 2}
+                  className="text-xs font-medium text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50 px-2 py-1 rounded transition-colors flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="Reorganizar endereços para menor distância"
+                >
+                  <Sparkles size={14} />
+                  Otimizar Ordem
+                </button>
+              </div>
               <p className="text-sm text-zinc-500 mb-4">
                 Endereços extraídos e ordenados. Você pode remover itens se necessário.
               </p>
@@ -514,25 +713,50 @@ ${cleanedText || 'Nenhum texto fornecido. Extraia os endereços apenas das image
                           animate={{ opacity: 1, scale: 1 }}
                           exit={{ opacity: 0, scale: 0.95, transition: { duration: 0.2 } }}
                           key={`${address}-${index}`}
-                          className="flex items-start gap-3 p-3 bg-zinc-50 border border-zinc-100 rounded-lg group hover:border-zinc-300 transition-colors"
+                          onClick={() => handleAddressClick(index, address)}
+                          className={`flex items-start gap-3 p-3 border rounded-lg group transition-all cursor-pointer ${
+                            selectedAddressIndex === index 
+                              ? 'bg-red-50 border-red-200 ring-1 ring-red-200 shadow-sm' 
+                              : 'bg-zinc-50 border-zinc-100 hover:border-zinc-300 hover:bg-white hover:shadow-sm'
+                          }`}
                         >
                           <div className="flex-shrink-0 mt-0.5 text-zinc-400">
-                            <div className="w-6 h-6 rounded-full bg-white border border-zinc-200 flex items-center justify-center text-xs font-medium text-zinc-600 shadow-sm">
+                            <div className={`w-6 h-6 rounded-full border flex items-center justify-center text-xs font-medium shadow-sm transition-colors ${
+                              selectedAddressIndex === index
+                                ? 'bg-red-100 border-red-200 text-red-700'
+                                : 'bg-white border-zinc-200 text-zinc-600'
+                            }`}>
                               {index + 1}
                             </div>
                           </div>
                           <div className="flex-1 min-w-0">
-                            <p className="text-sm text-zinc-700 leading-relaxed break-words">
+                            <p className={`text-sm leading-relaxed break-words ${
+                              selectedAddressIndex === index ? 'text-red-900 font-medium' : 'text-zinc-700'
+                            }`}>
                               {address}
                             </p>
+                            {!validateCEP(address) && (
+                              <div className="flex items-center gap-1.5 mt-1.5 text-amber-600 bg-amber-50 px-2 py-1 rounded text-xs font-medium w-fit">
+                                <AlertTriangle size={12} />
+                                <span>CEP ausente ou inválido</span>
+                              </div>
+                            )}
+                            {selectedAddressIndex === index && (
+                              <p className="text-xs text-red-500 mt-1 flex items-center gap-1">
+                                <MapPin size={10} />
+                                Visualizando no mapa...
+                              </p>
+                            )}
                           </div>
-                          <button
-                            onClick={() => handleRemoveAddress(index)}
-                            className="flex-shrink-0 text-zinc-400 hover:text-red-500 p-1 rounded-md hover:bg-red-50 transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100"
-                            title="Remover endereço"
-                          >
-                            <Trash2 size={16} />
-                          </button>
+                          <div className="flex items-center gap-2 ml-2" onClick={(e) => e.stopPropagation()}>
+                            <button
+                              onClick={() => handleRemoveAddress(index)}
+                              className="flex-shrink-0 text-zinc-400 hover:text-red-500 p-1.5 rounded-md hover:bg-red-50 transition-colors"
+                              title="Remover endereço"
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          </div>
                         </motion.li>
                       ))}
                     </ul>
@@ -541,14 +765,25 @@ ${cleanedText || 'Nenhum texto fornecido. Extraia os endereços apenas das image
               </div>
               
               <div className="p-4 bg-zinc-50 border-t border-zinc-200">
-                <button
-                  onClick={openFullRoute}
-                  disabled={addresses.length === 0 && !pickupAddress}
-                  className="w-full flex items-center justify-center gap-2 bg-red-600 hover:bg-red-700 text-white py-3 px-4 rounded-xl font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
-                >
-                  <MapPin size={18} />
-                  <span>Roteirizar Todos</span>
-                </button>
+                <div className="flex gap-2">
+                  <button
+                    onClick={openFullRoute}
+                    disabled={addresses.length === 0 && !pickupAddress}
+                    className="flex-1 flex items-center justify-center gap-2 bg-red-600 hover:bg-red-700 text-white py-3 px-4 rounded-xl font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
+                  >
+                    <MapPin size={18} />
+                    <span>Abrir Rota no App</span>
+                  </button>
+                  
+                  <button
+                    onClick={handleExport}
+                    disabled={addresses.length === 0}
+                    className="flex items-center justify-center gap-2 bg-white border border-zinc-200 hover:bg-zinc-50 text-zinc-700 py-3 px-4 rounded-xl font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
+                    title="Exportar lista para CSV"
+                  >
+                    <Download size={18} />
+                  </button>
+                </div>
                 
                 <div className="mt-3 flex items-center justify-center gap-2">
                   <input
